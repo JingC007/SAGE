@@ -33,6 +33,18 @@ def args_parser():
     parser.add_argument('--lr_local_training', type=float, default=0.1)
     parser.add_argument('--lr_distillation_training', type=float, default=0.1)
 
+    # debug / small-scale reproduction
+    parser.add_argument('--debug_rounds', type=int, default=None,
+                        help='Override the dataset default number of communication rounds')
+    parser.add_argument('--debug_num_labeled', type=int, default=None,
+                        help='Override labeled samples per class for debug runs')
+    parser.add_argument('--debug_train_limit', type=int, default=None,
+                        help='Class-balanced cap on training samples used for debug runs')
+    parser.add_argument('--debug_test_limit', type=int, default=None,
+                        help='Use only the first N test samples for debug runs')
+    parser.add_argument('--disable_dataset_replication', action='store_true',
+                        help='Disable artificial client dataset repetition used in full experiments')
+
     # dataset path
     parser.add_argument('--path_cifar10', type=str, default=os.path.join(path_dir, 'data/CIFAR10/'))
     parser.add_argument('--path_cifar100', type=str, default=os.path.join(path_dir, 'data/CIFAR100/'))

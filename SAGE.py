@@ -16,11 +16,108 @@ from tqdm import tqdm
 import copy
 import torch
 import random
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, Subset
 import logging
 import os
 
 worker_num = 4
+
+
+def _validate_positive_debug_arg(name, value):
+    if value is not None and value <= 0:
+        raise ValueError(f'{name} must be positive when provided, got {value}')
+
+
+def _limit_label2indices_balanced(list_label2indices, limit):
+    _validate_positive_debug_arg('debug_train_limit', limit)
+    if limit is None:
+        return list_label2indices
+
+    total_available = sum(len(indices) for indices in list_label2indices)
+    if limit >= total_available:
+        return list_label2indices
+
+    num_classes = len(list_label2indices)
+    if limit < num_classes:
+        raise ValueError(
+            f'debug_train_limit must be at least the number of classes ({num_classes}) '
+            f'to preserve class coverage, got {limit}'
+        )
+
+    per_class = limit // num_classes
+    remainder = limit % num_classes
+    limited_label2indices = []
+    for class_idx, indices in enumerate(list_label2indices):
+        take = per_class + (1 if class_idx < remainder else 0)
+        if len(indices) == 0:
+            raise ValueError(f'class {class_idx} has no training samples before debug limiting')
+        limited_label2indices.append(list(indices[:take]))
+    return limited_label2indices
+
+
+def _get_dataset_targets(dataset):
+    for attr in ('targets', 'labels'):
+        targets = getattr(dataset, attr, None)
+        if targets is not None:
+            return list(targets)
+
+    nested_dataset = getattr(dataset, 'dataset', None)
+    if nested_dataset is not None and nested_dataset is not dataset:
+        for attr in ('targets', 'labels'):
+            targets = getattr(nested_dataset, attr, None)
+            if targets is not None and len(targets) == len(dataset):
+                return list(targets)
+
+    return None
+
+
+def _limit_dataset_class_balanced(dataset, limit, num_classes, name):
+    _validate_positive_debug_arg(name, limit)
+    if limit is None or limit >= len(dataset):
+        return dataset
+
+    targets = _get_dataset_targets(dataset)
+    if targets is None or len(targets) != len(dataset):
+        return Subset(dataset, range(limit))
+
+    indices_by_class = [[] for _ in range(num_classes)]
+    for idx, target in enumerate(targets):
+        target = int(target)
+        if 0 <= target < num_classes:
+            indices_by_class[target].append(idx)
+
+    if any(len(indices) == 0 for indices in indices_by_class):
+        return Subset(dataset, range(limit))
+
+    per_class = limit // num_classes
+    remainder = limit % num_classes
+    selected_indices = []
+    for class_idx, indices in enumerate(indices_by_class):
+        take = per_class + (1 if class_idx < remainder else 0)
+        selected_indices.extend(indices[:take])
+
+    if len(selected_indices) < limit:
+        selected_set = set(selected_indices)
+        for idx in range(len(dataset)):
+            if idx not in selected_set:
+                selected_indices.append(idx)
+                if len(selected_indices) == limit:
+                    break
+
+    return Subset(dataset, selected_indices)
+
+
+def _validate_labeled_unlabeled_split(list_label2indices, num_labeled):
+    too_small_classes = [
+        class_idx
+        for class_idx, indices in enumerate(list_label2indices)
+        if len(indices) <= num_labeled
+    ]
+    if too_small_classes:
+        raise ValueError(
+            'debug settings leave no unlabeled samples for classes '
+            f'{too_small_classes}; increase debug_train_limit or decrease debug_num_labeled'
+        )
 
 
 class Global(object):
@@ -281,6 +378,19 @@ def fixmatch(alpha):
             f"Error: Unsupported dataset {args.dataset}. Please specify one of the following: CIFAR10, CIFAR100, CINIC10 or SVHN.")
         exit(1)
 
+    _validate_positive_debug_arg('debug_num_labeled', args.debug_num_labeled)
+    _validate_positive_debug_arg('debug_rounds', args.debug_rounds)
+    if args.debug_num_labeled is not None:
+        args.num_labeled = args.debug_num_labeled
+    if args.debug_rounds is not None:
+        args.num_rounds = args.debug_rounds
+    data_global_test = _limit_dataset_class_balanced(
+        data_global_test,
+        args.debug_test_limit,
+        args.num_classes,
+        'debug_test_limit'
+    )
+
     print(
         'dataset:{dataset}\n'
         'num_classes:{num_classes}\n'
@@ -302,6 +412,9 @@ def fixmatch(alpha):
     random_state = np.random.RandomState(args.seed)
 
     list_label2indices = classify_label(data_local_training, args.num_classes)
+    list_label2indices = _limit_label2indices_balanced(list_label2indices, args.debug_train_limit)
+    if args.debug_train_limit is not None or args.debug_num_labeled is not None:
+        _validate_labeled_unlabeled_split(list_label2indices, args.num_labeled)
 
     list_label2indices_labeled, list_label2indices_unlabeled = partition_train(list_label2indices, args.num_labeled)
 
@@ -336,8 +449,14 @@ def fixmatch(alpha):
     total_clients = list(range(args.num_clients))
 
 
-    indices2data_labeled = Indices2Dataset_labeled(data_local_training)
-    indices2data_unlabeled = Indices2Dataset_unlabeled_fixmatch(data_local_training)
+    indices2data_labeled = Indices2Dataset_labeled(
+        data_local_training,
+        disable_replication=args.disable_dataset_replication
+    )
+    indices2data_unlabeled = Indices2Dataset_unlabeled_fixmatch(
+        data_local_training,
+        disable_replication=args.disable_dataset_replication
+    )
 
     fedavg_acc = []
 

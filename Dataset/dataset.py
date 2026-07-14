@@ -98,16 +98,18 @@ def label_indices2indices(list_label2indices):
 
 
 class Indices2Dataset_labeled(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, disable_replication=False):
         self.dataset = dataset
         self.indices = None
+        self.disable_replication = disable_replication
 
     def load(self, indices: list):
         self.indices = indices
 
         ##### fix self.dataset v1 ######
         self.client_dataset = [self.dataset[i] for i in indices]
-        self.client_dataset *= 2000
+        if not self.disable_replication:
+            self.client_dataset *= 2000
         # 因为使用batch 128时，每次epoch都需要重新 iter(dataset) 一次，每次100ms
         # 这里复制多次dataset，减少运行 iter 函数的次数
         # 数字是随便定的
@@ -140,9 +142,10 @@ class Indices2Dataset_labeled(Dataset):
 
 
 class Indices2Dataset_unlabeled_fixmatch(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, disable_replication=False):
         self.dataset = dataset
         self.indices = None
+        self.disable_replication = disable_replication
 
     def load(self, indices: list):
         self.indices = indices
@@ -150,7 +153,8 @@ class Indices2Dataset_unlabeled_fixmatch(Dataset):
         ##### fix self.dataset v1 ######
         self.client_dataset = [self.dataset[i] for i in self.indices]
         self.client_dataset_len = len(self.client_dataset)
-        self.client_dataset *= 50 # save time loading data
+        if not self.disable_replication:
+            self.client_dataset *= 50 # save time loading data
 
 
     def fixmatch(self, image):
