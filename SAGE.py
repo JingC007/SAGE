@@ -441,6 +441,8 @@ def fixmatch(alpha):
 
     # add labeled samples without labels into the unlabeled dataset
     for client in range(args.num_clients):
+        list_client2indices_labeled[client] = list(list_client2indices_labeled[client])
+        list_client2indices_unlabeled[client] = list(list_client2indices_unlabeled[client])
         list_client2indices_unlabeled[client].extend(list_client2indices_labeled[client])
 
     global_model = Global(args)
